@@ -20,7 +20,14 @@ class exploreGame:
         self.board = np.zeros((size, size))
         self.agent = [int((size -1)/2), int((size -1)/2)] # given size must be odd, this places the player in the center
         self.goal = [0, 0]
+        self.trace = np.zeros((size,size))
+        self.update_trace()
 
+    def update_trace(self):
+        self.trace[self.agent[0], self.agent[1]] += 1
+
+    def get_trace(self):
+        return self.trace.copy() 
 
     def update(self, action):
         if action == 1: # simple switch to encode actions to movement, collides with invisible wall if on boundary
@@ -31,8 +38,8 @@ class exploreGame:
             self.agent[1] = max(0, self.agent[1] - 1) #left
         elif action == 4:
             self.agent[1] = min(self.size-1, self.agent[1] + 1) # right
-        
         # if action is 0 = do nothing
+        self.update_trace()
     def generate_frame(self):
         img = np.zeros((self.size, self.size, 3)) # rgb stack
         img[self.agent[0], self.agent[1]] = [0, 0, 255]
