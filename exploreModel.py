@@ -3,13 +3,14 @@ import numpy as np
 import math
 import random
 
-# for visualations
+# for visualations in jupyter
 import matplotlib
 import matplotlib.pyplot as plt
 
 class exploreGame:
     def __init__(self, size=21):
-        
+        #limit size to be between 11 - 101 and odd
+        #note that viewer may struggle with large sizes due to grid lines
         if size > 101:
             size = 101
         elif size % 2 == 0:
@@ -17,13 +18,13 @@ class exploreGame:
         if size < 11:
             size = 11
         self.size = int(size)
-        self.board = np.zeros((size, size))
+        self.board = np.zeros((size, size)) # this will be used for obstacles
         self.agent = [int((size -1)/2), int((size -1)/2)] # given size must be odd, this places the player in the center
-        self.goal = self.get_random_goal()
-        self.trace = np.zeros((size,size))
-        self.update_trace()
+        self.goal = self.get_random_goal() # puts the goal in a random starting position
+        self.trace = np.zeros((size,size)) # used for tracking the number of turns spent on each tile in the env
+        self.update_trace() # adds the occurence of spawning in the center to trace
 
-    def update_trace(self):
+    def update_trace(self): # increments the tile in the trace that the agent is currently on.
         self.trace[self.agent[0], self.agent[1]] += 1
 
     def get_trace(self):
@@ -41,9 +42,20 @@ class exploreGame:
         # if action is 0 = do nothing
         self.update_trace()
 
-    def get_random_goal(self):
-        choice = [np.random.choice(self.size), np.random.choice(self.size)]
-        return choice
+    def get_random_goal(self): # randomly spawns the goal in on the map
+        new_x = np.random.choice(self.size)
+        new_y = np.random.choice(self.size)
+        mid = (self.size - 1) // 2
+
+        if new_x == mid and new_y == mid: # if the choice would be the middle
+            roll = np.random.choice(2)
+            list = np.arange(self.size - 1) # list with one less option
+            list[int((self.size - 1) // 2)] = self.size - 1 # replace the midpoint with the outer boundary
+            if roll == 1: # 50/50 chance to reassign either coordinate
+                new_x = np.random.choice(list)
+            else:
+                new_y = np.random.choice(list)
+        return [new_x, new_y]
 
     def soft_reset(self): # resets the game state but not the trace
         self.board = self.board * 0
@@ -60,11 +72,13 @@ class exploreGame:
         self.trace = self.trace * 0
         self.update_trace()
 
-    def generate_frame(self):
+    def generate_frame(self): # builds an rgb stack based on game state
         img = np.zeros((self.size, self.size, 3)) # rgb stack
-        img[self.agent[0], self.agent[1]] = [0, 0, 255]
+        # order matters here for rendering in the case of an overlap
+        # lower means higher priority - ie drawn on top
         img[self.goal[0], self.goal[1]] = [0, 255, 0]
+        img[self.agent[0], self.agent[1]] = [0, 0, 255]
         return img
     
-    def draw(self):
+    def draw(self): # simply draws the current state rbg stack to pyplot output for jupyter
         plt.imshow(self.generate_frame().astype("int"))
