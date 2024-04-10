@@ -6,9 +6,10 @@ import pygame
 
 
 class exploreViewer:
-    def __init__(self,env_map, trace_map, size=21, framerate=60):
+    def __init__(self, events, env_map, trace_map, size=21, framerate=60):
         self.env_map = env_map
         self.trace_map = trace_map
+        self.event_queue = events
 
         pygame.init()
         
@@ -49,21 +50,25 @@ class exploreViewer:
     
     def start(self):
         while self.run:
-            self.env_colors = self.env_map.reshape(-1,3)
-            self.heatmap = self.trace_map.flatten()
-            
-            pygame.draw.rect(self.screen, self.background_color, self.background)
-            pygame.draw.rect(self.screen, self.boundary_color, self.zone_boundary)
-            for (rect, color) in zip(self.env_rects, self.env_colors):
-                pygame.draw.rect(self.screen, (color[0], color[1], color[2]), rect)
+            if self.event_queue.qsize() >= 2:
+                self.env_map = self.event_queue.get()
+                self.trace_map = self.event_queue.get()
+                self.env_colors = self.env_map.reshape(-1,3)
+                self.heatmap = self.trace_map.flatten()
+                self.heatmap = self.heatmap / self.heatmap.max() * 255
+                
+                pygame.draw.rect(self.screen, self.background_color, self.background)
+                pygame.draw.rect(self.screen, self.boundary_color, self.zone_boundary)
+                for (rect, color) in zip(self.env_rects, self.env_colors):
+                    pygame.draw.rect(self.screen, (color[0], color[1], color[2]), rect)
 
-            for (rect, intensity) in zip(self.heatmap_rects, self.heatmap):
-                pygame.draw.rect(self.screen, (intensity, intensity, intensity), rect)
+                for (rect, intensity) in zip(self.heatmap_rects, self.heatmap):
+                    pygame.draw.rect(self.screen, (intensity, intensity, intensity), rect)
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.run = False
-            
+
             pygame.display.update()
             pygame.time.wait((1000//self.framerate))
 
