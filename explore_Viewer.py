@@ -6,8 +6,9 @@ import pygame
 
 
 class exploreViewer:
-    def __init__(self, events, size=21, framerate=60):
+    def __init__(self, events, name="Explore", size=21, framerate=60):
         pygame.init()
+        self.name = name
         self.event_queue = events
         self.size = size
         self.framerate = framerate
@@ -45,6 +46,7 @@ class exploreViewer:
                                              , (i//self.size)*(self.rect_width+self.grid_width) + self.grid_width,self.rect_width,self.rect_width))
         # Set up display
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+        pygame.display.set_caption(self.name)
         self.run = True
 
         # draw first game state

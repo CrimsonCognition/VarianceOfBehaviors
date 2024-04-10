@@ -21,6 +21,7 @@ class exploreGame:
         self.board = np.zeros((size, size)) # this will be used for obstacles
         self.agent = [int((size -1)/2), int((size -1)/2)] # given size must be odd, this places the player in the center
         self.goal = self.get_random_goal() # puts the goal in a random starting position
+        self.won = False # used for primitive win condition
         self.trace = np.zeros((size,size)) # used for tracking the number of turns spent on each tile in the env
         self.update_trace() # adds the occurence of spawning in the center to trace
 
@@ -30,7 +31,8 @@ class exploreGame:
     def get_trace(self):
         return self.trace.copy() 
 
-    def update(self, action):
+    def update(self, action): # the game logic on a turn execution
+        old = [self.agent[0], self.agent[1]] # this will be used for collisions later
         if action == 1: # simple switch to encode actions to movement, collides with invisible wall if on boundary
             self.agent[0] = max(0, self.agent[0] - 1) #up
         elif action == 2:
@@ -39,6 +41,11 @@ class exploreGame:
             self.agent[1] = max(0, self.agent[1] - 1) #left
         elif action == 4:
             self.agent[1] = min(self.size-1, self.agent[1] + 1) # right
+
+        if not self.won: #if we haven't found the goal this game, check if we are at it
+            if self.agent[0] == self.goal[0] and self.agent[1] == self.goal[1]: # if we hit the goal, won is true
+                self.won = True
+                # we will want to add new goals for later
         # if action is 0 = do nothing
         self.update_trace()
 
@@ -62,6 +69,7 @@ class exploreGame:
         self.agent = [int((self.size - 1) / 2),
                       int((self.size - 1) / 2)]  # given size must be odd, this places the player in the center
         self.goal = self.get_random_goal()
+        self.won = False
         self.update_trace()
 
     def hard_reset(self): # resets the full object state as if a new instance was made
@@ -69,6 +77,7 @@ class exploreGame:
         self.agent = [int((self.size - 1) / 2),
                       int((self.size - 1) / 2)]  # given size must be odd, this places the player in the center
         self.goal = self.get_random_goal()
+        self.won = False
         self.trace = self.trace * 0
         self.update_trace()
 
@@ -76,7 +85,8 @@ class exploreGame:
         img = np.zeros((self.size, self.size, 3)) # rgb stack
         # order matters here for rendering in the case of an overlap
         # lower means higher priority - ie drawn on top
-        img[self.goal[0], self.goal[1]] = [0, 255, 0]
+        if not self.won: # we only draw the goal if its available to hit.
+            img[self.goal[0], self.goal[1]] = [0, 255, 0]
         img[self.agent[0], self.agent[1]] = [0, 0, 255]
         return img
     
