@@ -3,6 +3,8 @@ import numpy as np
 class Chooser():
     def __init__(self, space, probs=None, duration= 30):
         self.space = space
+        self.duration = -1
+        self.weights = probs
         if probs is not None and space != len(probs):
             raise Exception("Action space and probability must be the same dimension!")
         if probs is not None:

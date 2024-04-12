@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import math
 import random
 import itertools
@@ -6,7 +7,11 @@ import pygame
 
 
 class exploreViewer:
-    def __init__(self, events, name="Explore", size=21, framerate=60):
+    def __init__(self, events, name="Explore",x=5, y=20, size=21, window_height=300, framerate=60):
+        # this sets the windows location, this will be used to distribute windows when simulating many games at once
+        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (x, y)
+        pygame.init()
+        screen = pygame.display.set_mode((100, 100))
         pygame.init()
         self.name = name
         self.event_queue = events
@@ -19,8 +24,8 @@ class exploreViewer:
         else:
             self.env_map = np.zeros((self.size, self.size, 3))
             self.trace_map = np.zeros((self.size, self.size))
-        self.screen_width = 810
-        self.screen_height = 400
+        self.screen_width = 10 + window_height*2
+        self.screen_height = window_height
 
         self.grid_width = 4 # keep me even
         self.rect_width = (self.screen_height - (self.size+1)*self.grid_width)/self.size #adjusting the size based on parameters
