@@ -1,14 +1,14 @@
 import numpy as np
 import time
-import multiprocess
+from multiprocess import Process, Queue, Semaphore, Lock
 from explore import ExploreGame, launch_viewer
 
 def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser, framerate=121, acceleration=1, animate=True):
     semaphore.acquire()
     env = ExploreGame()  # create our game environment
     if animate:
-        q_animate = multiprocess.Queue()
-        myviewer = multiprocess.Process(target=launch_viewer, args=[q_animate])
+        q_animate = Queue()
+        myviewer = Process(target=launch_viewer, args=[q_animate])
         q_animate.put((env.generate_frame(), env.get_trace()))
         myviewer.start()
         time.sleep(1)  # let the window init

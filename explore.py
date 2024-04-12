@@ -2,8 +2,6 @@
 import numpy as np
 import os
 import pygame
-import itertools
-import multiprocess
 # for visualizations in jupyter
 import matplotlib.pyplot as plt
 
