@@ -3,12 +3,18 @@ import time
 from multiprocess import Process, Queue, Semaphore, Lock
 from explore import ExploreGame, launch_viewer
 
-def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser, framerate=121, acceleration=1, animate=True):
+def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser, size=21, window_height=300, framerate=121, acceleration=1, animate=True, position_queue=None ):
     semaphore.acquire()
-    env = ExploreGame()  # create our game environment
+    env = ExploreGame(size)  # create our game environment
+    view_name = "Explore" + str(chooser.weights) + " : " + str(chooser.duration)
     if animate:
+        if position_queue is None:
+            raise Exception("Can't animate sim without position queue!")
+        coords = position_queue.get()
+        view_x = coords[0]
+        view_y = coords[1]
         q_animate = Queue()
-        myviewer = Process(target=launch_viewer, args=[q_animate])
+        myviewer = Process(target=launch_viewer, args=[q_animate, view_name, view_x, view_y, size, window_height])
         q_animate.put((env.generate_frame(), env.get_trace()))
         myviewer.start()
         time.sleep(1)  # let the window init
@@ -38,6 +44,7 @@ def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser,
         time.sleep(5)
         q_animate.put("kill")
         myviewer.join()
+        position_queue.put(coords)
     semaphore.release()
     result_trace /= samples
     result_wins = np.array(result_wins)
@@ -45,10 +52,10 @@ def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser,
     sqrsamp = samples**.5
     win_data = (result_wins.mean(), result_wins.std(), result_wins.std()/sqrsamp)
     stdev_data = (result_trace_stdevs.mean(), result_trace_stdevs.std(), result_trace_stdevs.std()/sqrsamp)
-    outputs = (win_data, stdev_data, result_trace)
+    outputs = (chooser.weights, chooser.duration, win_data, stdev_data, result_trace)
     out_lock.acquire()
     q_out.put(outputs)
     out_lock.release()
-    return outputs
+    print(view_name, "Experiment ended")
 
 
