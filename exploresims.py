@@ -1,19 +1,17 @@
 import numpy as np
 import time
 import multiprocess
-import exploreModel
-from launch_async_viewer import launch_viewer
-from randomchooser import Chooser
+from explore import ExploreGame, launch_viewer
 
 def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser, framerate=121, acceleration=1, animate=True):
     semaphore.acquire()
-    env = exploreModel.exploreGame()  # create our game environment
+    env = ExploreGame()  # create our game environment
     if animate:
         q_animate = multiprocess.Queue()
         myviewer = multiprocess.Process(target=launch_viewer, args=[q_animate])
         q_animate.put((env.generate_frame(), env.get_trace()))
         myviewer.start()
-        time.sleep(1) # let the window init
+        time.sleep(1)  # let the window init
     result_wins = []
     result_trace_stdevs = []
     result_trace = np.zeros((env.size, env.size))
