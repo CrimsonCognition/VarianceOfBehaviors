@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import math
 import random
 import itertools
@@ -6,16 +7,25 @@ import pygame
 
 
 class exploreViewer:
-    def __init__(self, events, size=21, framerate=60):
+    def __init__(self, events, name="Explore",x=5, y=20, size=21, window_height=300, framerate=60):
+        # this sets the windows location, this will be used to distribute windows when simulating many games at once
+        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (x, y)
         pygame.init()
+        screen = pygame.display.set_mode((100, 100))
+        pygame.init()
+        self.name = name
         self.event_queue = events
         self.size = size
         self.framerate = framerate
-        input = events.get()
-        self.env_map = input[0]
-        self.trace_map = input[1]
-        self.screen_width = 810
-        self.screen_height = 400
+        if not events.empty():
+            input = events.get()
+            self.env_map = input[0]
+            self.trace_map = input[1]
+        else:
+            self.env_map = np.zeros((self.size, self.size, 3))
+            self.trace_map = np.zeros((self.size, self.size))
+        self.screen_width = 10 + window_height*2
+        self.screen_height = window_height
 
         self.grid_width = 4 # keep me even
         self.rect_width = (self.screen_height - (self.size+1)*self.grid_width)/self.size #adjusting the size based on parameters
@@ -38,13 +48,15 @@ class exploreViewer:
         # create a list of rects in a padded grid on the right half of the window for rendering the trace heatmap visualization
         self.heatmap_rects = []
         self.heatmap = self.trace_map.flatten() # again to match the dimensionality of the rect list
-        self.heatmap = self.heatmap/self.heatmap.max()*255  # scaling between 0-255 without normalizing fully. This ensures the same relative scale accross any 2 heatmaps
+        if self.heatmap.max() > 0:
+            self.heatmap = self.heatmap/self.heatmap.max()*255  # scaling between 0-255 without normalizing fully. This ensures the same relative scale accross any 2 heatmaps
         for i in range(self.size**2):                       # Note: this only aligns the lower bound at 0, bright spots may have different magnitudes. But this allows us to ensure destinctions
                                                             # We want to emphasize the differences in UNEXPLORED areas as opposed to simply distributions
             self.heatmap_rects.append(pygame.Rect((i%self.size)*(self.rect_width+self.grid_width) + self.grid_width + self.screen_width//2 + self.boundary_width//2
                                              , (i//self.size)*(self.rect_width+self.grid_width) + self.grid_width,self.rect_width,self.rect_width))
         # Set up display
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+        pygame.display.set_caption(self.name)
         self.run = True
 
         # draw first game state
