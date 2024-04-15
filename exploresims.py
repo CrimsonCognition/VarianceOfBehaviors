@@ -17,7 +17,7 @@ def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser,
         myviewer = Process(target=launch_viewer, args=[q_animate, view_name, view_x, view_y, size, window_height])
         q_animate.put((env.generate_frame(), env.get_trace()))
         myviewer.start()
-        time.sleep(1)  # let the window init
+        time.sleep(3)  # let the window init
     result_wins = []
     result_trace_stdevs = []
     result_trace = np.zeros((env.size, env.size))
@@ -53,9 +53,44 @@ def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser,
     win_data = (result_wins.mean(), result_wins.std(), result_wins.std()/sqrsamp)
     stdev_data = (result_trace_stdevs.mean(), result_trace_stdevs.std(), result_trace_stdevs.std()/sqrsamp)
     outputs = (chooser.weights, chooser.duration, win_data, stdev_data, result_trace)
+    print(view_name, "Experiment ended")
     out_lock.acquire()
     q_out.put(outputs)
     out_lock.release()
-    print(view_name, "Experiment ended")
+
+
+def sim_1(choosers, samples=100, games=100, turns=80, num_process=4, num_column=2):
+    max_processes = num_process
+    sem = Semaphore(max_processes)
+    out_lock = Lock()
+    output_queue = Queue()
+    pos_queue = Queue()
+
+    # make positions available
+    num_cols = num_column
+    for i in range(max_processes):
+        x = 30 + (i % num_cols) * (610 + 30)
+        y = 40 + (i // num_cols) * (300 + 40)
+        pos_queue.put((x, y))
+    sims = []
+    for ch in choosers:
+        curr_args = [sem, out_lock, output_queue, samples, games, turns, ch, 21,
+                     300, 30, 1.1, True, pos_queue]
+        p = Process(target=simulate_explore, args=curr_args)
+        sims.append(p)
+
+    for sim in sims:
+        sim.start()
+
+    results = []
+    tgt = len(choosers)
+    while len(results) < tgt:
+        out_lock.acquire()
+        if not output_queue.empty():
+            results.append(output_queue.get())
+        out_lock.release()
+        time.sleep(2)  # only check once ever 2 seconds
+
+    return results
 
 
