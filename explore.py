@@ -52,6 +52,28 @@ class ExploreGame:
             elif self.board[target[0]][target[1]] == 1:  # if the stem has intersected an existing wall
                 self.propogate_wall(target, val, action)  # Skip this position and recurr
 
+    def clean_diagonal_walls(self): # We want to remove instances of obstructions composed of diagonal walls
+        # We are going to convolve looking for strictly diagonal obstructions
+        complete = True
+        for i in range(self.size -1): # -1 as we are suing a 2x2 convol
+            for j in range(self.size -1):
+                window = self.board[i:i+2, j:j+2]
+                if window.sum() == 2: # must be true for a strictly diagonal wall to be present
+                    if window.trace() == 2:  # must be a left diagonal
+                        complete = False
+                        choices = [[i, j], [i+1, j+1]]
+                        choice = np.random.choice([0, 1])
+                        choice = choices[choice]
+                        self.board[choice[0], choice[1]] = 0  # remove a random member of the diagonal wall
+                    elif window.trace() == 0:  # must be a right diagonal
+                        complete = False
+                        choices = [[i, j+1], [i + 1, j]]
+                        choice = np.random.choice([0, 1])
+                        choice = choices[choice]
+                        self.board[choice[0], choice[1]] = 0  # remove a random member of the diagonal wall
+        return complete
+
+
     def build_map(self):
         pattern = self.gen_noise_pattern()  # we need a noise pattern to build from
 
@@ -62,6 +84,9 @@ class ExploreGame:
                     val = pattern[i][k]
                     # a function that takes i,k, val to build a stem
                     self.propogate_wall((i, k), val, 4)
+        cleaned = False
+        while not cleaned:
+            cleaned = self.clean_diagonal_walls()
         return pattern
 
 
