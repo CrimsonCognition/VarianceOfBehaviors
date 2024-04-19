@@ -2,6 +2,7 @@
 import numpy as np
 import os
 import pygame
+from randomchooser import Chooser
 # for visualizations in jupyter
 import matplotlib.pyplot as plt
 
@@ -25,15 +26,18 @@ class ExploreGame:
         self.trace = np.zeros((size, size))  # used for tracking the number of turns spent on each tile in the env
         self.update_trace()  # adds the occurence of spawning in the center to trace
 
-    def gen_noise_pattern(self): # generate a noise pattern of spawn points for wall chains
+        # util structs
+        self.action_pairs = np.array([[-1, 0], [0, -1], [1, 0], [0, 1]])  # the action vectors excluding no movement
+
+    def gen_noise_pattern(self):  # generate a noise pattern of spawn points for wall chains
         return np.random.choice([0, 5, 4, 3], (self.size, self.size), p=[.9, .025, .025, .05])
 
-    def action_switch(self, i, j, action):
-        temp = np.array([[-1, 0], [0, -1], [1, 0], [0, 1]])
-        coord = np.array([i, j])
-        return coord - temp[action]
-    def propogate_wall(self, coord, val, last_move):  # takes a root location, and build val number of leaves recursively,
-        if val == 0:                                 # does not allow for doubling back with last_move and detection
+    def action_switch(self, coord, action):
+        return coord - self.action_pairs[action]
+
+    def propagate_wall(self, coord, val, last_move):  # takes a root location, and build val number of
+        # leaves recursively, does not allow for doubling back with last_move and detection
+        if val == 0:
             return True
         else:
             probs = np.ones(4)
@@ -41,38 +45,53 @@ class ExploreGame:
                 probs[(last_move + 2) % 4] = 0  # disallow going backwards
             probs = probs/probs.sum()  # normalize
             action = np.random.choice([0, 1, 2, 3], p=probs)
-            target = self.action_switch(coord[0], coord[1], action)
+            target = self.action_switch(coord, action)
             # stay in bounds
             target[0] = max(0, min(target[0], 20))
             target[1] = max(0, min(target[1], 20))
 
             if self.board[target[0]][target[1]] == 0:  # if the space does not have an obstacle yet
                 self.board[coord[0]][coord[1]] = 1  # place a wall
-                self.propogate_wall(target, val-1, action)  # Recurr
+                self.propagate_wall(target, val-1, action)  # Recurr
             elif self.board[target[0]][target[1]] == 1:  # if the stem has intersected an existing wall
-                self.propogate_wall(target, val, action)  # Skip this position and recurr
+                self.propagate_wall(target, val, action)  # Skip this position and recurr
 
-    def clean_diagonal_walls(self): # We want to remove instances of obstructions composed of diagonal walls
+    def find_diagonal_choices(self, i, j, window):
+        if window.sum() == 2:
+            mytrace = window.trace()
+            if mytrace == 2:  # A left diagonal
+                return [[i, j], [i+1, j+1]]
+            elif mytrace == 0:  # a right diagonal
+                return [[i, j+1], [i + 1, j]]
+            else:
+                return None
+        else:
+            return None
+
+    def correct_diagonal_wall(self, i, j, p=.5):
+        action = np.random.choice([0, 1], p=[1-p, p])  # Choose between adding or removing a wall to correct diagonality
+        if action == 1:
+            self.board[i, j] = 1  # add a wall
+        else:
+            self.board[i, j] = 0  # remove a wall
+
+    def clean_diagonal_walls(self, p=.5):  # We want to remove instances of obstructions composed of diagonal walls
         # We are going to convolve looking for strictly diagonal obstructions
         complete = True
-        for i in range(self.size -1): # -1 as we are suing a 2x2 convol
-            for j in range(self.size -1):
+        for i in range(self.size - 1):  # -1 as we are suing a 2x2 convol
+            for j in range(self.size - 1):
                 window = self.board[i:i+2, j:j+2]
-                if window.sum() == 2: # must be true for a strictly diagonal wall to be present
-                    if window.trace() == 2:  # must be a left diagonal
-                        complete = False
-                        choices = [[i, j], [i+1, j+1]]
-                        choice = np.random.choice([0, 1])
-                        choice = choices[choice]
-                        self.board[choice[0], choice[1]] = 0  # remove a random member of the diagonal wall
-                    elif window.trace() == 0:  # must be a right diagonal
-                        complete = False
-                        choices = [[i, j+1], [i + 1, j]]
-                        choice = np.random.choice([0, 1])
-                        choice = choices[choice]
-                        self.board[choice[0], choice[1]] = 0  # remove a random member of the diagonal wall
-        return complete
+                choices = self.find_diagonal_choices(i, j, window)
 
+                if choices is not None:  # must be true for a strictly diagonal wall to be present
+                    # must be a left diagonal
+                    complete = False
+                    choice = np.random.choice([0, 1])
+                    choice = choices[choice]
+                    self.correct_diagonal_wall(choice[0], choice[1], p)
+        if not complete:  # recurr with more bias to destruction until clean
+            self.clean_diagonal_walls(max(0, p - .1))  # clean again but with less additive correction
+        return complete
 
     def build_map(self):
         pattern = self.gen_noise_pattern()  # we need a noise pattern to build from
@@ -83,11 +102,9 @@ class ExploreGame:
                 if pattern[i][k] > 0:
                     val = pattern[i][k]
                     # a function that takes i,k, val to build a stem
-                    self.propogate_wall((i, k), val, 4)
-        cleaned = False
-        while not cleaned:
-            cleaned = self.clean_diagonal_walls()
-        return pattern
+                    self.propagate_wall((i, k), val, 4)
+        cleaned = self.clean_diagonal_walls()
+        return pattern, cleaned
 
 
 
