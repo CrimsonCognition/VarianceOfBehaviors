@@ -109,6 +109,8 @@ class ExploreGame:
                     # a function that takes i,k, val to build a stem
                     self.propagate_wall((i, k), val, 4)
         cleaned = self.clean_diagonal_walls()
+        center = int((self.size - 1) / 2)
+        self.board[center, center] = 0  # Force spawn point to be open
         return pattern, cleaned
 
     def update_trace(self):  # increments the tile in the trace that the agent is currently on.
@@ -153,8 +155,8 @@ class ExploreGame:
 
         return self.goal_options[choice]
 
-    def soft_reset(self):  # resets the game state but not the trace
-        self.board = self.board * 0
+    def soft_reset(self):  # resets the game state but not the trace or map
+        #self.board = self.board * 0
         self.agent = [int((self.size - 1) / 2),
                       int((self.size - 1) / 2)]  # given size must be odd, this places the player in the center
         self.goal = self.get_random_goal()
@@ -162,7 +164,10 @@ class ExploreGame:
         self.update_trace()
 
     def hard_reset(self):  # resets the full object state as if a new instance was made
-        self.board = self.board * 0
+        if self.maze:
+            self.board = self.board * 0
+            self.build_map()
+        self.goal_options = None
         self.agent = [int((self.size - 1) / 2),
                       int((self.size - 1) / 2)]  # given size must be odd, this places the player in the center
         self.goal = self.get_random_goal()
@@ -174,6 +179,7 @@ class ExploreGame:
         img = np.zeros((self.size, self.size, 3))  # rgb stack
         # order matters here for rendering in the case of an overlap
         # lower means higher priority - ie drawn on top
+        img[self.board == 1] = [128, 96, 96]
         if not self.won:  # we only draw the goal if its available to hit.
             img[self.goal[0], self.goal[1]] = [0, 255, 0]
         img[self.agent[0], self.agent[1]] = [0, 0, 255]
