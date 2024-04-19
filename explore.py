@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 
 class ExploreGame:
-    def __init__(self, size=21):
+    def __init__(self, size=21, maze=True):
         # limit size to be between 11 - 101 and odd
         # note that viewer may struggle with large sizes due to grid lines
         if size > 101:
@@ -17,17 +17,22 @@ class ExploreGame:
             size += 1
         if size < 11:
             size = 11
+        # util structs
+        self.action_pairs = np.array([[-1, 0], [0, -1], [1, 0], [0, 1]])  # the action vectors excluding no movement
         self.size = int(size)
+        self.maze = maze
         self.board = np.zeros((size, size))  # this will be used for obstacles
+        if maze:
+            self.build_map()
         self.agent = [int((size - 1) / 2),
                       int((size - 1) / 2)]  # given size must be odd, this places the player in the center
+        self.goal_options = None
         self.goal = self.get_random_goal()  # puts the goal in a random starting position
         self.won = False  # used for primitive win condition
         self.trace = np.zeros((size, size))  # used for tracking the number of turns spent on each tile in the env
         self.update_trace()  # adds the occurence of spawning in the center to trace
 
-        # util structs
-        self.action_pairs = np.array([[-1, 0], [0, -1], [1, 0], [0, 1]])  # the action vectors excluding no movement
+
 
     def gen_noise_pattern(self):  # generate a noise pattern of spawn points for wall chains
         return np.random.choice([0, 5, 4, 3], (self.size, self.size), p=[.9, .025, .025, .05])
@@ -106,8 +111,6 @@ class ExploreGame:
         cleaned = self.clean_diagonal_walls()
         return pattern, cleaned
 
-
-
     def update_trace(self):  # increments the tile in the trace that the agent is currently on.
         self.trace[self.agent[0], self.agent[1]] += 1
 
@@ -132,20 +135,23 @@ class ExploreGame:
         # if action is 0 = do nothing
         self.update_trace()
 
-    def get_random_goal(self):  # randomly spawns the goal in on the map
-        new_x = np.random.choice(self.size)
-        new_y = np.random.choice(self.size)
-        mid = (self.size - 1) // 2
-
-        if new_x == mid and new_y == mid:  # if the choice would be the middle
-            roll = np.random.choice(2)
-            list = np.arange(self.size - 1)  # list with one less option
-            list[int((self.size - 1) // 2)] = self.size - 1  # replace the midpoint with the outer boundary
-            if roll == 1:  # 50/50 chance to reassign either coordinate
-                new_x = np.random.choice(list)
+    def build_goal_options(self):
+        self.goal_options = []
+        free_squares = np.where(self.board == 0)
+        center = int((self.size - 1) / 2)
+        for (i, j) in zip(free_squares[0], free_squares[1]):
+            if i == center and j == center:  # Skip where the agent must spawn
+                continue
             else:
-                new_y = np.random.choice(list)
-        return [new_x, new_y]
+                self.goal_options.append([i, j])
+
+    def get_random_goal(self):  # randomly spawns the goal in on the map
+        if self.goal_options is None:
+            self.build_goal_options()
+
+        choice = np.random.choice(np.arange(len(self.goal_options)))
+
+        return self.goal_options[choice]
 
     def soft_reset(self):  # resets the game state but not the trace
         self.board = self.board * 0
