@@ -25,6 +25,47 @@ class ExploreGame:
         self.trace = np.zeros((size, size))  # used for tracking the number of turns spent on each tile in the env
         self.update_trace()  # adds the occurence of spawning in the center to trace
 
+    def gen_noise_pattern(self): # generate a noise pattern of spawn points for wall chains
+        return np.random.choice([0, 5, 4, 3], (self.size, self.size), p=[.9, .025, .025, .05])
+
+    def action_switch(self, i, j, action):
+        temp = np.array([[-1, 0], [0, -1], [1, 0], [0, 1]])
+        coord = np.array([i, j])
+        return coord - temp[action]
+    def propogate_wall(self, coord, val, last_move):  # takes a root location, and build val number of leaves recursively,
+        if val == 0:                                 # does not allow for doubling back with last_move and detection
+            return True
+        else:
+            probs = np.ones(4)
+            if last_move < 4:
+                probs[(last_move + 2) % 4] = 0  # disallow going backwards
+            probs = probs/probs.sum()  # normalize
+            action = np.random.choice([0, 1, 2, 3], p=probs)
+            target = self.action_switch(coord[0], coord[1], action)
+            # stay in bounds
+            target[0] = max(0, min(target[0], 20))
+            target[1] = max(0, min(target[1], 20))
+
+            if self.board[target[0]][target[1]] == 0:  # if the space does not have an obstacle yet
+                self.board[coord[0]][coord[1]] = 1  # place a wall
+                self.propogate_wall(target, val-1, action)  # Recurr
+            elif self.board[target[0]][target[1]] == 1:  # if the stem has intersected an existing wall
+                self.propogate_wall(target, val, action)  # Skip this position and recurr
+
+    def build_map(self):
+        pattern = self.gen_noise_pattern()  # we need a noise pattern to build from
+
+        # let's do a naive search over the pattern, more efficient solutions exist in numpy but this is legible
+        for i in range(self.size):
+            for k in range(self.size):
+                if pattern[i][k] > 0:
+                    val = pattern[i][k]
+                    # a function that takes i,k, val to build a stem
+                    self.propogate_wall((i, k), val, 4)
+        return pattern
+
+
+
     def update_trace(self):  # increments the tile in the trace that the agent is currently on.
         self.trace[self.agent[0], self.agent[1]] += 1
 
