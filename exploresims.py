@@ -75,7 +75,7 @@ def sim_1(choosers, samples=100, games=100, turns=80, num_process=4, num_column=
     sims = []
     for ch in choosers:
         curr_args = [sem, out_lock, output_queue, samples, games, turns, ch, 21,
-                     300, 30, 1.1, True, pos_queue]
+                     300, 60, 1.05, True, pos_queue]
         p = Process(target=simulate_explore, args=curr_args)
         sims.append(p)
 

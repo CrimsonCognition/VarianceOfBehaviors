@@ -1,6 +1,7 @@
 # fundamental tools for the game environment model
 import numpy as np
 import os
+import random
 import pygame
 from randomchooser import Chooser
 # for visualizations in jupyter
@@ -22,10 +23,10 @@ class ExploreGame:
         self.size = int(size)
         self.maze = maze
         self.board = np.zeros((size, size))  # this will be used for obstacles
-        if maze:
-            self.build_map()
         self.agent = [int((size - 1) / 2),
                       int((size - 1) / 2)]  # given size must be odd, this places the player in the center
+        if maze:
+            self.build_map()
         self.goal_options = None
         self.goal = self.get_random_goal()  # puts the goal in a random starting position
         self.won = False  # used for primitive win condition
@@ -129,6 +130,8 @@ class ExploreGame:
         self.fill_map_holes()
         center = int((self.size - 1) / 2)
         self.board[center, center] = 0  # Force spawn point to be open
+        self.clean_diagonal_walls(0)
+        cleaned, sample = self.correct_map_defects()
         return pattern, cleaned
 
     def update_trace(self):  # increments the tile in the trace that the agent is currently on.
@@ -137,18 +140,124 @@ class ExploreGame:
     def get_trace(self):
         return self.trace.copy()
 
+    def propagate_from_spawn(self, board): #
+        coord_list = []
+        marker = -1
+        coord_list.append(self.agent)
+        board[self.agent[0], self.agent[1]] = marker
+        while coord_list:
+            coord = coord_list.pop()
+            neighbors = []
+            for k in range(4):  # prep neighbor coords
+                neighbors.append(self.action_switch((coord[0], coord[1]), k))
+            for neighbor in neighbors:
+                if neighbor[0] >= 0 and neighbor[0] < self.size and neighbor[1] >= 0 and neighbor[1] < self.size:
+                    if board[neighbor[0], neighbor[1]] == 0:
+                        coord_list.append(neighbor)
+                        board[neighbor[0], neighbor[1]] = marker
+        return board
+
+    def map_is_valid(self): # returns true if every "open" tile is reachable from spawn point
+        test = self.propagate_from_spawn(self.board.copy())
+        return (test == 0).sum() == 0, test
+
+    def find_walls_touching_target(self, sample, target):
+        walls = np.where(sample == 1)
+        walls_touching_target = []
+        for (i, j) in zip(walls[0], walls[1]): # for all walls
+            for k in range(4):
+                coord = self.action_switch((i, j), k)  # find walls that neighbor reachables
+                if coord[0] < 0 or coord[0] >= self.size or coord[1] < 0 or coord[1] >= self.size:
+                    continue
+                elif sample[coord[0], coord[1]] == target:
+                    walls_touching_target.append([i, j])
+                    break
+        return walls_touching_target
+
+    def are_neighbors(self, coord_1, coord_2):
+        for k in range(4):
+            act = self.action_switch(coord_1, k)
+            if coord_2 == [act[0], act[1]]:
+                return True
+        return False
+
+    def build_neighborhood(self, group, pool):
+        if group:
+            out = []
+            # find neighbors of group
+            for g in group:
+                for k in range(4):
+                    for p in range(len(pool)):
+                        if self.are_neighbors(g, pool[p]):
+                            out.append(pool.pop(p))
+                            break
+            out_recurr = self.build_neighborhood(out, pool)  # find the neighbors neighbors
+            final = []
+            for x in group:
+                final.append(x)
+            for x in out_recurr:
+                final.append(x)
+            return final
+        else:
+            return []
+
+    def build_neighborhoods(self, coords):
+        neighborhoods = []
+        while coords:
+            neighborhoods.append([coords.pop(0)])
+            neighborhoods[-1] = self.build_neighborhood(neighborhoods[-1], coords)
+        return neighborhoods
+
+    def correct_map_defects(self):
+        validity, sample = self.map_is_valid()
+        if validity:
+            return validity, sample
+        else:
+            walls_on_reachable = self.find_walls_touching_target(sample, -1)
+            walls_on_enclosed = self.find_walls_touching_target(sample, 0)
+            collisions = []
+            for e in walls_on_enclosed:
+                for r in walls_on_reachable:
+                    if r == e:
+                        collisions.append(r)
+            random.shuffle(collisions)
+
+            if collisions:
+                neighborhoods = self.build_neighborhoods(collisions)
+                random.shuffle(neighborhoods)
+                for set in neighborhoods:
+                    random.shuffle(set)
+                    self.board[set[0][0], set[0][1]] = 0
+                    validity, sample = self.map_is_valid()
+                    if validity:
+                        break
+                self.clean_diagonal_walls(0)
+                if not validity:
+                    return self.correct_map_defects()
+            else:
+                neighborhoods = self.build_neighborhoods(walls_on_enclosed)
+                random.shuffle(neighborhoods)
+                for set in neighborhoods:
+                    random.shuffle(set)
+                    self.board[set[0][0], set[0][1]] = 0
+                    validity, sample = self.map_is_valid()
+                    if validity:
+                        break
+                self.clean_diagonal_walls(0)
+                if not validity:
+                    return self.correct_map_defects()
+            return self.map_is_valid()
+
     def update(self, action):  # the game logic on a turn execution
         old = [self.agent[0], self.agent[1]]  # this will be used for collisions later
-        if action == 1:  # simple switch to encode actions to movement, collides with invisible wall if on boundary
-            self.agent[0] = max(0, self.agent[0] - 1)  # up
-        elif action == 2:
-            self.agent[0] = min(self.size - 1, self.agent[0] + 1)  # down
-        elif action == 3:
-            self.agent[1] = max(0, self.agent[1] - 1)  # left
-        elif action == 4:
-            self.agent[1] = min(self.size - 1, self.agent[1] + 1)  # right
+        if action < 4:
+            coord = self.action_switch(self.agent, action)
+            self.agent = [min(self.size-1, max(0, coord[0])), min(self.size-1, max(0, coord[1]))]
 
-        if not self.won:  # if we haven't found the goal this game, check if we are at it
+        if self.board[self.agent[0], self.agent[1]] == 1:  # collide with wall = don't move
+            self.agent = old
+
+        elif not self.won:  # if we haven't found the goal this game, check if we are at it
             if self.agent[0] == self.goal[0] and self.agent[1] == self.goal[1]:  # if we hit the goal, won is true
                 self.won = True
                 # we will want to add new goals for later
