@@ -113,7 +113,6 @@ class ExploreGame:
                 else:  # otherwise count the bounds as a wall
                     walled += 1
             if walled == 4:  # if we are blocked off / are an island
-                print("filled", i, j)
                 self.board[i][j] = 1  # become a wall as well
 
     def build_map(self):
