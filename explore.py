@@ -98,6 +98,24 @@ class ExploreGame:
             self.clean_diagonal_walls(max(0, p - .1))  # clean again but with less additive correction
         return complete
 
+    def fill_map_holes(self): # special case filling on map
+        #  this function fills any single tile that has a wall in each cardinal direction but is not a wall itself
+        #  this function should take place after diagonals are cleaned
+        coords = np.where(self.board == 0)  # for all open tiles
+        for (i, j) in zip(coords[0], coords[1]):
+            neighbors = []
+            for k in range(4): # prep neighbor coords
+                neighbors.append(self.action_switch((i, j), k))
+            walled = 0
+            for tile in neighbors:  # if inside the map bounds check the neighbor value on board
+                if tile[0] >= 0 and tile[0] < self.size and tile[1] >= 0 and tile[1] < self.size:
+                    walled += self.board[tile[0]][tile[1]]
+                else:  # otherwise count the bounds as a wall
+                    walled += 1
+            if walled == 4:  # if we are blocked off / are an island
+                print("filled", i, j)
+                self.board[i][j] = 1  # become a wall as well
+
     def build_map(self):
         pattern = self.gen_noise_pattern()  # we need a noise pattern to build from
 
@@ -106,9 +124,10 @@ class ExploreGame:
             for k in range(self.size):
                 if pattern[i][k] > 0:
                     val = pattern[i][k]
-                    # a function that takes i,k, val to build a stem
+                    # a function that takes i, k, val to build a stem
                     self.propagate_wall((i, k), val, 4)
         cleaned = self.clean_diagonal_walls()
+        self.fill_map_holes()
         center = int((self.size - 1) / 2)
         self.board[center, center] = 0  # Force spawn point to be open
         return pattern, cleaned
