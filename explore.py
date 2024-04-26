@@ -30,37 +30,45 @@ class ExploreGame:
         self.goal_options = None
         self.goal = self.get_random_goal()  # puts the goal in a random starting position
         self.won = False  # used for primitive win condition
+        self.score_goal = 10
+        self.score = 0
         self.trace = np.zeros((size, size))  # used for tracking the number of turns spent on each tile in the env
         self.update_trace()  # adds the occurence of spawning in the center to trace
 
-
-
     def gen_noise_pattern(self):  # generate a noise pattern of spawn points for wall chains
-        return np.random.choice([0, 5, 4, 3], (self.size, self.size), p=[.9, .025, .025, .05])
+        p = .7 + (.95 - .7)*(np.random.random() + np.random.random())/2  # Binomial distribution between .7 and .95
+        q = 1 - p
+        q /= 10
+        offset = 4  # must be even
+        pattern = np.random.choice([0, 9, 6, 4], (self.size-offset, self.size-offset), p=[p, q, 3*q, 6*q])
+        full_pattern = np.zeros((self.size, self.size))
+        full_pattern[2:self.size-offset//2, 2:self.size - offset//2] = pattern
+        return full_pattern
 
     def action_switch(self, coord, action):
         return coord - self.action_pairs[action]
 
-    def propagate_wall(self, coord, val, last_move):  # takes a root location, and build val number of
+    def propagate_wall(self, coord, val, last_move, chooser=None):  # takes a root location, and build val number of
         # leaves recursively, does not allow for doubling back with last_move and detection
         if val == 0:
             return True
         else:
             probs = np.ones(4)
+            if chooser is not None:
+                probs = chooser.probs.copy()
             if last_move < 4:
                 probs[(last_move + 2) % 4] = 0  # disallow going backwards
             probs = probs/probs.sum()  # normalize
             action = np.random.choice([0, 1, 2, 3], p=probs)
-            target = self.action_switch(coord, action)
+            chooser.get_random_action()  # iterates the chooser but doesn't
+            target = self.action_switch(coord, action)  # use its choice - as it may include the backwards
             # stay in bounds
             target[0] = max(0, min(target[0], 20))
             target[1] = max(0, min(target[1], 20))
 
             if self.board[target[0]][target[1]] == 0:  # if the space does not have an obstacle yet
                 self.board[coord[0]][coord[1]] = 1  # place a wall
-                self.propagate_wall(target, val-1, action)  # Recurr
-            elif self.board[target[0]][target[1]] == 1:  # if the stem has intersected an existing wall
-                self.propagate_wall(target, val, action)  # Skip this position and recurr
+            self.propagate_wall(target, val-1, action, chooser)  # Recurr
 
     def find_diagonal_choices(self, i, j, window):
         if window.sum() == 2:
@@ -81,7 +89,7 @@ class ExploreGame:
         else:
             self.board[i, j] = 0  # remove a wall
 
-    def clean_diagonal_walls(self, p=.5):  # We want to remove instances of obstructions composed of diagonal walls
+    def clean_diagonal_walls(self, p=1):  # We want to remove instances of obstructions composed of diagonal walls
         # We are going to convolve looking for strictly diagonal obstructions
         complete = True
         for i in range(self.size - 1):  # -1 as we are suing a 2x2 convol
@@ -118,14 +126,14 @@ class ExploreGame:
 
     def build_map(self):
         pattern = self.gen_noise_pattern()  # we need a noise pattern to build from
-
+        chooser = Chooser(4, [5, 15, 10, 5], 3)
         # let's do a naive search over the pattern, more efficient solutions exist in numpy but this is legible
         for i in range(self.size):
             for k in range(self.size):
                 if pattern[i][k] > 0:
                     val = pattern[i][k]
                     # a function that takes i, k, val to build a stem
-                    self.propagate_wall((i, k), val, 4)
+                    self.propagate_wall((i, k), val, 4, chooser)
         cleaned = self.clean_diagonal_walls()
         self.fill_map_holes()
         center = int((self.size - 1) / 2)
@@ -248,28 +256,43 @@ class ExploreGame:
                     return self.correct_map_defects()
             return self.map_is_valid()
 
+    def on_goal_reached(self):
+        self.score += 1
+        if self.score >= self.score_goal:
+            self.won = True
+        else:
+            self.new_map()
+
     def update(self, action):  # the game logic on a turn execution
+        if self.won:
+            return self.won
         old = [self.agent[0], self.agent[1]]  # this will be used for collisions later
         if action < 4:
             coord = self.action_switch(self.agent, action)
             self.agent = [min(self.size-1, max(0, coord[0])), min(self.size-1, max(0, coord[1]))]
+        else:
+            return self.won
 
         if self.board[self.agent[0], self.agent[1]] == 1:  # collide with wall = don't move
             self.agent = old
-
-        elif not self.won:  # if we haven't found the goal this game, check if we are at it
-            if self.agent[0] == self.goal[0] and self.agent[1] == self.goal[1]:  # if we hit the goal, won is true
-                self.won = True
-                # we will want to add new goals for later
+        elif self.agent[0] == self.goal[0] and self.agent[1] == self.goal[1]:  # if we hit the goal, add points
+            self.on_goal_reached()
+            # we will want to add new goals for later
         # if action is 0 = do nothing
         self.update_trace()
+        return self.won
 
     def build_goal_options(self):
         self.goal_options = []
         free_squares = np.where(self.board == 0)
         center = int((self.size - 1) / 2)
+        delta = int(self.size // 4)
+        lower = center - delta
+        upper = center + delta
         for (i, j) in zip(free_squares[0], free_squares[1]):
-            if i == center and j == center:  # Skip where the agent must spawn
+            if i == center and j == center:  # Skip where the agent must spawn, yes this is redundant if exclusion is on
+                continue
+            elif (lower <= i <= upper) and (lower <= j <= upper):
                 continue
             else:
                 self.goal_options.append([i, j])
@@ -282,25 +305,26 @@ class ExploreGame:
 
         return self.goal_options[choice]
 
-    def soft_reset(self):  # resets the game state but not the trace or map
-        #self.board = self.board * 0
-        self.agent = [int((self.size - 1) / 2),
-                      int((self.size - 1) / 2)]  # given size must be odd, this places the player in the center
-        self.goal = self.get_random_goal()
-        self.won = False
-        self.update_trace()
-
-    def hard_reset(self):  # resets the full object state as if a new instance was made
-        if self.maze:
+    def new_map(self, build=True):
+        if build and self.maze:
             self.board = self.board * 0
             self.build_map()
         self.goal_options = None
         self.agent = [int((self.size - 1) / 2),
                       int((self.size - 1) / 2)]  # given size must be odd, this places the player in the center
         self.goal = self.get_random_goal()
-        self.won = False
-        self.trace = self.trace * 0
         self.update_trace()
+
+    def soft_reset(self, rebuild=True):  # resets the game state but not the trace and optionally the map
+        self.new_map(rebuild)
+        self.won = False
+        self.score = 0
+
+    def hard_reset(self):  # resets the full object state as if a new instance was made
+        self.trace = self.trace * 0
+        self.new_map()
+        self.won = False
+        self.score = 0
 
     def generate_frame(self):  # builds an rgb stack based on game state
         img = np.zeros((self.size, self.size, 3))  # rgb stack
