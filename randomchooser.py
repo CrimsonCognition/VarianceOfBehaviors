@@ -34,7 +34,6 @@ class Chooser():
     def get_uniformly_random_action(self):
         return np.random.choice(self.space)
 
-
     def get_variably_random_action(self):
         # pull a move from the current move pool with the current probability distribution
         cur = np.random.choice(self.move_pool, 1, p=self.hist)[0]

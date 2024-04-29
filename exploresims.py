@@ -2,6 +2,7 @@ import numpy as np
 import time
 from multiprocess import Process, Queue, Semaphore, Lock
 from explore import ExploreGame, launch_viewer
+from randomchooser import Chooser
 
 def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser, size=21, window_height=300, framerate=121, acceleration=1, animate=True, position_queue=None ):
     semaphore.acquire()
@@ -30,7 +31,7 @@ def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser,
                     q_animate.put((env.generate_frame(), env.get_trace()))
                     if framerate < 120:
                         time.sleep(1/framerate)
-            wins += env.won
+            wins += env.score
             env.soft_reset()  # new game env each game
             if framerate < 120:
                 framerate *= acceleration
@@ -75,7 +76,7 @@ def sim_1(choosers, samples=100, games=100, turns=80, num_process=4, num_column=
     sims = []
     for ch in choosers:
         curr_args = [sem, out_lock, output_queue, samples, games, turns, ch, 21,
-                     300, 30, 1.1, True, pos_queue]
+                     300, 30, 1.05, True, pos_queue]
         p = Process(target=simulate_explore, args=curr_args)
         sims.append(p)
 
@@ -93,4 +94,38 @@ def sim_1(choosers, samples=100, games=100, turns=80, num_process=4, num_column=
 
     return results
 
+def demo_1(samples=1, games=10, turns=80, num_process=1, num_column=2):
+    max_processes = num_process
+    sem = Semaphore(max_processes)
+    out_lock = Lock()
+    output_queue = Queue()
+    pos_queue = Queue()
 
+    choosers = [Chooser(5)]
+
+    # make positions available
+    num_cols = num_column
+    for i in range(max_processes):
+        x = 30 + (i % num_cols) * (610 + 30)
+        y = 40 + (i // num_cols) * (300 + 40)
+        pos_queue.put((x, y))
+    sims = []
+    for ch in choosers:
+        curr_args = [sem, out_lock, output_queue, samples, games, turns, ch, 21,
+                     300, 15, 1.0, True, pos_queue]
+        p = Process(target=simulate_explore, args=curr_args)
+        sims.append(p)
+
+    for sim in sims:
+        sim.start()
+
+    results = []
+    tgt = len(choosers)
+    while len(results) < tgt:
+        out_lock.acquire()
+        if not output_queue.empty():
+            results.append(output_queue.get())
+        out_lock.release()
+        time.sleep(2)  # only check once ever 2 seconds
+
+    return None
