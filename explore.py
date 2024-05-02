@@ -423,7 +423,7 @@ class ExploreGame:
 
 
 class ExploreViewer:
-    def __init__(self, events, name="Explore",x=5, y=20, size=21, window_height=300, framerate=60):
+    def __init__(self, events, name="Explore", x=5, y=20, size=21, window_height=300, framerate=60):
         # this sets the windows location, this will be used to distribute windows when simulating many games at once
         os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (x, y)
         pygame.init()
@@ -525,6 +525,6 @@ class ExploreViewer:
         pygame.quit()
 
 
-def launch_viewer(q, name="Explore", x=5, y=20, size=21, window_height=300):
-    view = ExploreViewer(q, name, x, y, size, window_height)
+def launch_viewer(q, name="Explore", x=5, y=20, size=21, window_height=300, framerate=60):
+    view = ExploreViewer(q, name, x, y, size, window_height, framerate)
     view.start()
