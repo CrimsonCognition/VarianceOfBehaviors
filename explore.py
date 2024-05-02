@@ -59,9 +59,8 @@ class ExploreGame:
         # used for tracking the number of turns spent on each tile in the env
         self.update_trace()  # adds the occurrence of spawning in the center to trace
 
-
     def gen_noise_pattern(self):  # generate a noise pattern of spawn points for wall chains
-        p = self.sparsity  # + (.95 - self.sparsity)*(np.random.random() + np.random.random())/2
+        p = self.sparsity + (.95 - self.sparsity)*(np.random.random() + np.random.random())/2
         # Binomial distribution between sparsity and .95
         q = 1 - p  # The probability of having a wall root
         q /= 10  # splitting q to be distributed between multiple possibilities
@@ -76,35 +75,26 @@ class ExploreGame:
     def action_switch(self, coord, action):  # returns the next coord given a current coord and action
         return coord - self.action_pairs[action]
 
-    def propagate_wall(self, coord, val, last_move, chooser=None):
+    def propagate_wall(self, coord, val, last_move):
         # takes a root location, and build val number of
         # leaves recursively, does not allow for doubling back with last_move and detection
 
         if val == 0:  # The base case, if there are no walls left to make, end
             return True
         else:
-            probs = np.ones(4)  # uniform if no chooser
-            if chooser is not None:  # if using a chooser pull the hist and modify accordingly
-                probs = np.zeros(4)
-                hist = chooser.hist.copy()
-                move_pool = chooser.move_pool.copy()
-                for (i, p) in zip(move_pool, hist):
-                    probs[i] = p
+            probs = np.arange(4)  # uniform if no chooser
             if last_move < 4:
-                probs[(last_move + 2) % 4] = 0  # disallow going backwards
-            probs = probs/probs.sum()  # normalize
-            action = np.random.choice([0, 1, 2, 3], p=probs)
-            chooser.get_random_action()  # iterates the chooser but doesn't use the action
-            while chooser.move_pool.shape[0] == 1 and chooser.move_pool[0] == ((action + 2) % 4):  # if new hist would
-                # require moving backwards make a new one
-                chooser.reset_hist()
+                probs[(last_move + 2) % 4] = -1  # disallow going backwards
+            probs = probs[probs >= 0]
+            action = probs[np.random.randint(0, probs.size)]
+
             target = self.action_switch(coord, action)  # use its choice - as it may include the backwards
             # stay in bounds
             target[0] = max(0, min(target[0], self.size - 1))
             target[1] = max(0, min(target[1], self.size - 1))
 
             self.board[coord[0]][coord[1]] = 1  # place a wall
-            self.propagate_wall(target, val-1, action, chooser)  # Recur
+            self.propagate_wall(target, val-1, action)  # Recur
 
     def clean_diagonal_walls(self, p=.5):
         # We want to remove instances of obstructions composed of diagonal walls
@@ -144,15 +134,14 @@ class ExploreGame:
 
         add_or_remove = np.random.choice([False, True], (length, 1), p=[1 - p, p])
 
-        result = anti_choices * add_or_remove + choices * (1 - add_or_remove).astype("int8")
+        result = (anti_choices * add_or_remove + choices * (1 - add_or_remove)).astype("int8")
 
         result, idx = np.unique(result, True, axis=0)
 
-        result = np.hstack([result, add_or_remove[idx]]).astype("int")
+        result = np.hstack([result, add_or_remove[idx]]).astype("int8")
 
         self.board[result[:, 0], result[:, 1]] = result[:, 2]
         return self.clean_diagonal_walls(max(0, p - .1))
-
 
     def fill_map_holes(self):  # special case filling on map
         #  this function fills any single tile that has a wall in each cardinal direction but is not a wall itself
@@ -173,20 +162,33 @@ class ExploreGame:
                 self.board[i][j] = 1  # become a wall as well
 
     def build_map(self):  # Procedurally generates a map
+        #t1 = time.time_ns()
         pattern = self.gen_noise_pattern()  # we need a noise pattern to build from
-        chooser = Chooser(4, [1, 5, 10, 2], 3)  # We are using the Chooser to enhance the behavior of wall propagation
-        # For all tiles that have a root, call propagate wall
-        roots = np.where(pattern > 0)
-        for (i, j) in zip(roots[0], roots[1]):
-            val = pattern[i][j]
-            # a function that takes i, j, val to build a stem
-            self.propagate_wall((i, j), val, 4, chooser)  # last move is 4 to indicate no "last" move exists yet
 
-        cleaned = self.clean_diagonal_walls()  # quick pass for initial clean up
+        # For all tiles that have a root, call propagate wall
+        root_i, root_j = np.where(pattern > 0)
+        vals = pattern[root_i, root_j]
+        #t2 = time.time_ns()
+        for (i, j, v) in zip(root_i, root_j, vals):
+            # a function that takes i, j, val to build a stem
+            self.propagate_wall(np.array([i, j]), v, 4)  # last move is 4 to indicate no "last" move exists yet
+        #t3 = time.time_ns()
+
+        self.clean_diagonal_walls()  # quick pass for initial clean up
         self.fill_map_holes()  # remove trivial cases of map defects
         self.board[self.center, self.center] = 0  # Force spawn point to be open
         self.clean_diagonal_walls(0)  # just in case the above correction created a diagonal, is destructive only
+
+        #t4 = time.time_ns()
         cleaned, sample = self.correct_map_defects()  # This function connects all closed regions to spaw point
+        #t5 = time.time_ns()
+
+        #print("P1", (t2-t1)/1000000)
+        #print("P2", (t3-t2)/1000000)
+        #print("P3", (t4-t3)/1000000)
+        #print("P4", (t5-t4)/1000000)
+        #print("Total", (t5-t1)/1000000)
+
         return pattern, cleaned
 
     def update_trace(self):  # increments the tile in the trace that the agent is currently on.
@@ -226,17 +228,35 @@ class ExploreGame:
         return (test == 0).sum() == 0, test
 
     def find_walls_touching_target(self, sample, target):
-        walls = np.where(sample == 1)
-        walls_touching_target = []
-        for (i, j) in zip(walls[0], walls[1]): # for all walls
-            for k in range(4):
-                coord = self.action_switch((i, j), k)  # find walls that neighbor reachables
-                if coord[0] < 0 or coord[0] >= self.size or coord[1] < 0 or coord[1] >= self.size:
-                    continue
-                elif sample[coord[0], coord[1]] == target:
-                    walls_touching_target.append([i, j])
-                    break
-        return walls_touching_target
+        walls_i, walls_j = np.where(sample == 1)
+        indxs = np.vstack([walls_i, walls_j], dtype="int8").T
+        up = indxs + self.action_pairs[0]
+        t = (up.min(axis=1) >= 0) & (up.max(axis=1) < self.size)
+        up = up[t]
+        up = up[sample[up[:, 0], up[:, 1]] == target]
+        up = up - self.action_pairs[0]
+
+        left = indxs + self.action_pairs[1]
+        t = (left.min(axis=1) >= 0) & (left.max(axis=1) < self.size)
+        left = left[t]
+        left = left[sample[left[:, 0], left[:, 1]] == target]
+        left = left - self.action_pairs[1]
+
+        down = indxs + self.action_pairs[2]
+        t = (down.min(axis=1) >= 0) & (down.max(axis=1) < self.size)
+        down = down[t]
+        down = down[sample[down[:, 0], down[:, 1]] == target]
+        down = down - self.action_pairs[2]
+
+        right = indxs + self.action_pairs[3]
+        t = (right.min(axis=1) >= 0) & (right.max(axis=1) < self.size)
+        right = right[t]
+        right = right[sample[right[:, 0], right[:, 1]] == target]
+        right = right - self.action_pairs[3]
+
+        out = np.vstack([up, left, down, right], dtype="int8")
+        out = np.unique(out, axis=0)
+        return out
 
     def are_neighbors(self, coord_1, coord_2):
         for k in range(4):
@@ -279,38 +299,43 @@ class ExploreGame:
         else:
             walls_on_reachable = self.find_walls_touching_target(sample, -1)
             walls_on_enclosed = self.find_walls_touching_target(sample, 0)
-            collisions = []
-            for e in walls_on_enclosed:
-                for r in walls_on_reachable:
-                    if r == e:
-                        collisions.append(r)
-            random.shuffle(collisions)
+
+            collisions = np.vstack([walls_on_reachable, walls_on_enclosed])
+            uniques, u, cs = np.unique(collisions, True, False, True, axis=0)
+            collisions = collisions[u[cs > 1]]
+
+            temp2 = []
+            temp3 = []
+
+            for x in walls_on_enclosed:
+                temp2.append([x[0], x[1]])
+            for x in collisions:
+                temp3.append([x[0], x[1]])
+
+            walls_on_enclosed = temp2
+            collisions = temp3
 
             if collisions:
-                neighborhoods = self.build_neighborhoods(collisions)
-                random.shuffle(neighborhoods)
-                for set in neighborhoods:
-                    random.shuffle(set)
-                    self.board[set[0][0], set[0][1]] = 0
-                    validity, sample = self.map_is_valid()
-                    if validity:
-                        break
+                collisions = np.array(collisions, dtype="int16")
+                self.board[collisions[:, 0], collisions[:, 1]] = 0
                 self.clean_diagonal_walls(0)
-                if not validity:
-                    return self.correct_map_defects()
+                return self.correct_map_defects()
             else:
-                neighborhoods = self.build_neighborhoods(walls_on_enclosed)
-                random.shuffle(neighborhoods)
-                for set in neighborhoods:
-                    random.shuffle(set)
-                    self.board[set[0][0], set[0][1]] = 0
-                    validity, sample = self.map_is_valid()
-                    if validity:
-                        break
+                # decimate enclosing walls
+                walls_on_enclosed = np.array(walls_on_enclosed)
+                length = walls_on_enclosed.shape[0]
+                decimation_factor = 20
+                # by increasing decimation rate for larger maps, we may sacrifice some quality to achieve
+                # a close to constant number of iterations to resolve the map
+                if self.size >= 81:
+                    decimation_factor = 5
+                elif self.size >= 41:
+                    decimation_factor = 10
+                val = max(1, length // decimation_factor)
+                indxs = np.random.choice(np.arange(length), val, False)
+                self.board[walls_on_enclosed[indxs, 0], walls_on_enclosed[indxs, 1]] = 0
                 self.clean_diagonal_walls(0)
-                if not validity:
-                    return self.correct_map_defects()
-            return self.map_is_valid()
+                return self.correct_map_defects()
 
     def on_goal_reached(self):
         self.score += 1
