@@ -390,14 +390,14 @@ class ExploreGame:
         if build and self.maze:
             self.board = self.board * 0
             self.build_map()
-        self.goal_options = None
+            self.goal_options = None
         self.agent = np.array([self.center, self.center])
         # given size must be odd, this places the player in the center
 
         self.goal = self.get_random_goal()
         self.update_trace()
 
-    def soft_reset(self, rebuild=True):  # resets the game state but not the trace and optionally the map
+    def soft_reset(self, rebuild=False):  # resets the game state but not the trace and optionally the map
         self.new_map(rebuild)
         self.won = False
         self.score = 0
