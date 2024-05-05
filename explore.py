@@ -1,15 +1,17 @@
 # fundamental tools for the game environment model
 import numpy as np
+from scipy.signal import convolve2d
 import os
 import random
 import pygame
 from randomchooser import Chooser
 # for visualizations in jupyter
 import matplotlib.pyplot as plt
+import time
 
 
 class ExploreGame:
-    def __init__(self, size=21, maze=True):
+    def __init__(self, size=21, maze=True, excluded=True, noise_boundary=4, sparsity=.8):
         # limit size to be between 11 - 101 and odd
         # note that viewer may struggle with large sizes due to grid lines
         if size > 101:
@@ -18,128 +20,175 @@ class ExploreGame:
             size += 1
         if size < 11:
             size = 11
+
+        if noise_boundary < 0:
+            noise_boundary = 0
+        elif noise_boundary > size//4:  # cap this at a smaller portion of size
+            noise_boundary = size//4
+
+        if noise_boundary % 2 == 1:  # The noise_boundary must be even
+            noise_boundary += 1
+
         # util structs
-        self.action_pairs = np.array([[-1, 0], [0, -1], [1, 0], [0, 1]])  # the action vectors excluding no movement
+        self.action_pairs = np.array([[-1, 0], [0, -1], [1, 0], [0, 1]], dtype="int8")
+        # the action vectors excluding no movement
+
         self.size = int(size)
+        self.center = int(size // 2)
+        self.sparsity = sparsity
+        self.noise_boundary = noise_boundary
+        self.excluded = excluded
         self.maze = maze
-        self.board = np.zeros((size, size))  # this will be used for obstacles
-        self.agent = [int((size - 1) / 2),
-                      int((size - 1) / 2)]  # given size must be odd, this places the player in the center
-        if maze:
-            self.build_map()
-        self.goal_options = None
-        self.goal = self.get_random_goal()  # puts the goal in a random starting position
-        self.won = False  # used for primitive win condition
+        self.board = np.zeros((size, size), dtype="int8")  # this will be used for obstacles
+        self.agent = np.array([self.center, self.center], dtype="int8")
+        # given size must be odd,
+        # this places the player in the center
+
+        self.won = False  # used for win condition
         self.score_goal = 10
         self.score = 0
-        self.trace = np.zeros((size, size))  # used for tracking the number of turns spent on each tile in the env
-        self.update_trace()  # adds the occurence of spawning in the center to trace
+
+        self.diag_kernel = np.array([[1, -1], [-1, 1]], dtype="int8")
+        if maze:
+            self.build_map()
+
+        self.goal_options = None
+        self.goal = self.get_random_goal()  # puts the goal in a random starting position
+
+        self.trace = np.zeros((size, size))
+        # used for tracking the number of turns spent on each tile in the env
+        self.update_trace()  # adds the occurrence of spawning in the center to trace
 
     def gen_noise_pattern(self):  # generate a noise pattern of spawn points for wall chains
-        p = .7 + (.95 - .7)*(np.random.random() + np.random.random())/2  # Binomial distribution between .7 and .95
-        q = 1 - p
-        q /= 10
-        offset = 4  # must be even
+        p = self.sparsity + (.95 - self.sparsity)*(np.random.random() + np.random.random())/2
+        # Binomial distribution between sparsity and .95
+        q = 1 - p  # The probability of having a wall root
+        q /= 10  # splitting q to be distributed between multiple possibilities
+        offset = self.noise_boundary  # must be even - used to prevent walls from starting on the edges
+        # Note this does not prevent walls from propagating to the edges
         pattern = np.random.choice([0, 9, 6, 4], (self.size-offset, self.size-offset), p=[p, q, 3*q, 6*q])
         full_pattern = np.zeros((self.size, self.size))
-        full_pattern[2:self.size-offset//2, 2:self.size - offset//2] = pattern
+        offset = offset // 2
+        full_pattern[offset:self.size-offset, offset:self.size - offset] = pattern
         return full_pattern
 
-    def action_switch(self, coord, action):
+    def action_switch(self, coord, action):  # returns the next coord given a current coord and action
         return coord - self.action_pairs[action]
 
-    def propagate_wall(self, coord, val, last_move, chooser=None):  # takes a root location, and build val number of
+    def propagate_wall(self, coord, val, last_move):
+        # takes a root location, and build val number of
         # leaves recursively, does not allow for doubling back with last_move and detection
-        if val == 0:
+
+        if val == 0:  # The base case, if there are no walls left to make, end
             return True
         else:
-            probs = np.ones(4)
-            if chooser is not None:
-                probs = chooser.probs.copy()
+            probs = np.arange(4)  # uniform if no chooser
             if last_move < 4:
-                probs[(last_move + 2) % 4] = 0  # disallow going backwards
-            probs = probs/probs.sum()  # normalize
-            action = np.random.choice([0, 1, 2, 3], p=probs)
-            chooser.get_random_action()  # iterates the chooser but doesn't
+                probs[(last_move + 2) % 4] = -1  # disallow going backwards
+            probs = probs[probs >= 0]
+            action = probs[np.random.randint(0, probs.size)]
+
             target = self.action_switch(coord, action)  # use its choice - as it may include the backwards
             # stay in bounds
-            target[0] = max(0, min(target[0], 20))
-            target[1] = max(0, min(target[1], 20))
+            target[0] = max(0, min(target[0], self.size - 1))
+            target[1] = max(0, min(target[1], self.size - 1))
 
-            if self.board[target[0]][target[1]] == 0:  # if the space does not have an obstacle yet
-                self.board[coord[0]][coord[1]] = 1  # place a wall
-            self.propagate_wall(target, val-1, action, chooser)  # Recurr
+            self.board[coord[0]][coord[1]] = 1  # place a wall
+            self.propagate_wall(target, val-1, action)  # Recur
 
-    def find_diagonal_choices(self, i, j, window):
-        if window.sum() == 2:
-            mytrace = window.trace()
-            if mytrace == 2:  # A left diagonal
-                return [[i, j], [i+1, j+1]]
-            elif mytrace == 0:  # a right diagonal
-                return [[i, j+1], [i + 1, j]]
-            else:
-                return None
-        else:
-            return None
-
-    def correct_diagonal_wall(self, i, j, p=.5):
-        action = np.random.choice([0, 1], p=[1-p, p])  # Choose between adding or removing a wall to correct diagonality
-        if action == 1:
-            self.board[i, j] = 1  # add a wall
-        else:
-            self.board[i, j] = 0  # remove a wall
-
-    def clean_diagonal_walls(self, p=1):  # We want to remove instances of obstructions composed of diagonal walls
+    def clean_diagonal_walls(self, p=.5):
+        # We want to remove instances of obstructions composed of diagonal walls
         # We are going to convolve looking for strictly diagonal obstructions
-        complete = True
-        for i in range(self.size - 1):  # -1 as we are suing a 2x2 convol
-            for j in range(self.size - 1):
-                window = self.board[i:i+2, j:j+2]
-                choices = self.find_diagonal_choices(i, j, window)
+        # Specifically we are looking for wall layouts that look like
+        # [1, 0]  or [0, 1]
+        # [0, 1]     [1, 0]
+        # We want to correct or remove these as they prevent passage via cardinal motion but are not cardinally
+        # connected themselves.
+        convolution = convolve2d(self.board, self.diag_kernel, mode="valid").astype("int8")
+        mask = (convolution == 2) | (convolution == -2)
+        if mask.sum() == 0:
+            return True
+        diagonals_1, diagonals_2 = np.where(mask)
+        length = diagonals_1.shape[0]
+        diag1 = np.zeros((length, 2), dtype="int8")
+        diag1[:, 0] = diagonals_1
+        diag1[:, 1] = diagonals_2
 
-                if choices is not None:  # must be true for a strictly diagonal wall to be present
-                    # must be a left diagonal
-                    complete = False
-                    choice = np.random.choice([0, 1])
-                    choice = choices[choice]
-                    self.correct_diagonal_wall(choice[0], choice[1], p)
-        if not complete:  # recurr with more bias to destruction until clean
-            self.clean_diagonal_walls(max(0, p - .1))  # clean again but with less additive correction
-        return complete
+        diag2 = diag1 + [1, 1]
+        adiag1 = diag1 + [0, 1]
+        adiag2 = diag1 + [1, 0]
 
-    def fill_map_holes(self): # special case filling on map
+        diag_mask = (convolution[diagonals_1, diagonals_2] == 2).reshape(-1, 1)
+        adiag_mask = (convolution[diagonals_1, diagonals_2] == -2).reshape(-1, 1)
+
+        select = np.random.choice([True, False], (length, 1))
+
+        choices = diag1 * select + diag2 * (1 - select)
+        anti_choices = adiag1 * select + adiag2 * (1 - select)
+
+        temp = choices * diag_mask + anti_choices * adiag_mask
+        temp2 = anti_choices * diag_mask + choices * adiag_mask
+
+        choices = temp.copy()
+        anti_choices = temp2.copy()
+
+        add_or_remove = np.random.choice([False, True], (length, 1), p=[1 - p, p])
+
+        result = (anti_choices * add_or_remove + choices * (1 - add_or_remove)).astype("int8")
+
+        result, idx = np.unique(result, True, axis=0)
+
+        result = np.hstack([result, add_or_remove[idx]]).astype("int8")
+
+        self.board[result[:, 0], result[:, 1]] = result[:, 2]
+        return self.clean_diagonal_walls(max(0, p - .1))
+
+    def fill_map_holes(self):  # special case filling on map
         #  this function fills any single tile that has a wall in each cardinal direction but is not a wall itself
         #  this function should take place after diagonals are cleaned
+        # In other words, if we find closed regions of size 1, fill them in, rather than include them for reconnection
         coords = np.where(self.board == 0)  # for all open tiles
         for (i, j) in zip(coords[0], coords[1]):
             neighbors = []
-            for k in range(4): # prep neighbor coords
+            for k in range(4):  # prep neighbor coords
                 neighbors.append(self.action_switch((i, j), k))
             walled = 0
             for tile in neighbors:  # if inside the map bounds check the neighbor value on board
-                if tile[0] >= 0 and tile[0] < self.size and tile[1] >= 0 and tile[1] < self.size:
+                if 0 <= tile[0] < self.size and 0 <= tile[1] < self.size:
                     walled += self.board[tile[0]][tile[1]]
                 else:  # otherwise count the bounds as a wall
                     walled += 1
             if walled == 4:  # if we are blocked off / are an island
                 self.board[i][j] = 1  # become a wall as well
 
-    def build_map(self):
+    def build_map(self):  # Procedurally generates a map
+        #t1 = time.time_ns()
         pattern = self.gen_noise_pattern()  # we need a noise pattern to build from
-        chooser = Chooser(4, [5, 15, 10, 5], 3)
-        # let's do a naive search over the pattern, more efficient solutions exist in numpy but this is legible
-        for i in range(self.size):
-            for k in range(self.size):
-                if pattern[i][k] > 0:
-                    val = pattern[i][k]
-                    # a function that takes i, k, val to build a stem
-                    self.propagate_wall((i, k), val, 4, chooser)
-        cleaned = self.clean_diagonal_walls()
-        self.fill_map_holes()
-        center = int((self.size - 1) / 2)
-        self.board[center, center] = 0  # Force spawn point to be open
-        self.clean_diagonal_walls(0)
-        cleaned, sample = self.correct_map_defects()
+
+        # For all tiles that have a root, call propagate wall
+        root_i, root_j = np.where(pattern > 0)
+        vals = pattern[root_i, root_j]
+        #t2 = time.time_ns()
+        for (i, j, v) in zip(root_i, root_j, vals):
+            # a function that takes i, j, val to build a stem
+            self.propagate_wall(np.array([i, j]), v, 4)  # last move is 4 to indicate no "last" move exists yet
+        #t3 = time.time_ns()
+
+        self.clean_diagonal_walls()  # quick pass for initial clean up
+        self.fill_map_holes()  # remove trivial cases of map defects
+        self.board[self.center, self.center] = 0  # Force spawn point to be open
+        self.clean_diagonal_walls(0)  # just in case the above correction created a diagonal, is destructive only
+
+        #t4 = time.time_ns()
+        cleaned, sample = self.correct_map_defects()  # This function connects all closed regions to spaw point
+        #t5 = time.time_ns()
+
+        #print("P1", (t2-t1)/1000000)
+        #print("P2", (t3-t2)/1000000)
+        #print("P3", (t4-t3)/1000000)
+        #print("P4", (t5-t4)/1000000)
+        #print("Total", (t5-t1)/1000000)
+
         return pattern, cleaned
 
     def update_trace(self):  # increments the tile in the trace that the agent is currently on.
@@ -148,39 +197,66 @@ class ExploreGame:
     def get_trace(self):
         return self.trace.copy()
 
-    def propagate_from_spawn(self, board): #
+    def propagate_from_spawn(self, board):
         coord_list = []
         marker = -1
-        coord_list.append(self.agent)
+        coord_list.append(self.agent.reshape(1, 2))
         board[self.agent[0], self.agent[1]] = marker
-        while coord_list:
+        # Starting from the spawn point, mark each neighboring free space as reachable,
+        # then check those space's neighbors until all reachable spaces from spawn have been checked
+        # then return this marked down board, where reachable tiles are noted as the marker value
+        # walls remain as 1s and closed regions of unreachable space are 0s
+        while coord_list:  # While we have coords to check
             coord = coord_list.pop()
-            neighbors = []
-            for k in range(4):  # prep neighbor coords
-                neighbors.append(self.action_switch((coord[0], coord[1]), k))
-            for neighbor in neighbors:
-                if neighbor[0] >= 0 and neighbor[0] < self.size and neighbor[1] >= 0 and neighbor[1] < self.size:
-                    if board[neighbor[0], neighbor[1]] == 0:
-                        coord_list.append(neighbor)
-                        board[neighbor[0], neighbor[1]] = marker
+            neighbors = np.zeros((4 * coord.shape[0], 2), dtype="int")
+            for (i, c) in zip(range(coord.shape[0]), coord):
+                temp = self.action_pairs + c
+                neighbors[4 * i:4 * (i + 1), :] = temp
+
+            neighbors = np.unique(neighbors, axis=0)
+            # remove out of bounds
+            neighbors = neighbors[(neighbors.min(axis=1) >= 0) & (neighbors.max(axis=1) < self.size), :]
+
+            neighbors = neighbors[board[neighbors[:, 0], neighbors[:, 1]] == 0]
+            board[neighbors[:, 0], neighbors[:, 1]] = marker
+            if neighbors.shape[0] > 0:
+                coord_list.append(neighbors)
         return board
 
-    def map_is_valid(self): # returns true if every "open" tile is reachable from spawn point
+    def map_is_valid(self):  # returns true if every "open" tile is reachable from spawn point
         test = self.propagate_from_spawn(self.board.copy())
         return (test == 0).sum() == 0, test
 
     def find_walls_touching_target(self, sample, target):
-        walls = np.where(sample == 1)
-        walls_touching_target = []
-        for (i, j) in zip(walls[0], walls[1]): # for all walls
-            for k in range(4):
-                coord = self.action_switch((i, j), k)  # find walls that neighbor reachables
-                if coord[0] < 0 or coord[0] >= self.size or coord[1] < 0 or coord[1] >= self.size:
-                    continue
-                elif sample[coord[0], coord[1]] == target:
-                    walls_touching_target.append([i, j])
-                    break
-        return walls_touching_target
+        walls_i, walls_j = np.where(sample == 1)
+        indxs = np.vstack([walls_i, walls_j], dtype="int8").T
+        up = indxs + self.action_pairs[0]
+        t = (up.min(axis=1) >= 0) & (up.max(axis=1) < self.size)
+        up = up[t]
+        up = up[sample[up[:, 0], up[:, 1]] == target]
+        up = up - self.action_pairs[0]
+
+        left = indxs + self.action_pairs[1]
+        t = (left.min(axis=1) >= 0) & (left.max(axis=1) < self.size)
+        left = left[t]
+        left = left[sample[left[:, 0], left[:, 1]] == target]
+        left = left - self.action_pairs[1]
+
+        down = indxs + self.action_pairs[2]
+        t = (down.min(axis=1) >= 0) & (down.max(axis=1) < self.size)
+        down = down[t]
+        down = down[sample[down[:, 0], down[:, 1]] == target]
+        down = down - self.action_pairs[2]
+
+        right = indxs + self.action_pairs[3]
+        t = (right.min(axis=1) >= 0) & (right.max(axis=1) < self.size)
+        right = right[t]
+        right = right[sample[right[:, 0], right[:, 1]] == target]
+        right = right - self.action_pairs[3]
+
+        out = np.vstack([up, left, down, right], dtype="int8")
+        out = np.unique(out, axis=0)
+        return out
 
     def are_neighbors(self, coord_1, coord_2):
         for k in range(4):
@@ -223,38 +299,43 @@ class ExploreGame:
         else:
             walls_on_reachable = self.find_walls_touching_target(sample, -1)
             walls_on_enclosed = self.find_walls_touching_target(sample, 0)
-            collisions = []
-            for e in walls_on_enclosed:
-                for r in walls_on_reachable:
-                    if r == e:
-                        collisions.append(r)
-            random.shuffle(collisions)
+
+            collisions = np.vstack([walls_on_reachable, walls_on_enclosed])
+            uniques, u, cs = np.unique(collisions, True, False, True, axis=0)
+            collisions = collisions[u[cs > 1]]
+
+            temp2 = []
+            temp3 = []
+
+            for x in walls_on_enclosed:
+                temp2.append([x[0], x[1]])
+            for x in collisions:
+                temp3.append([x[0], x[1]])
+
+            walls_on_enclosed = temp2
+            collisions = temp3
 
             if collisions:
-                neighborhoods = self.build_neighborhoods(collisions)
-                random.shuffle(neighborhoods)
-                for set in neighborhoods:
-                    random.shuffle(set)
-                    self.board[set[0][0], set[0][1]] = 0
-                    validity, sample = self.map_is_valid()
-                    if validity:
-                        break
+                collisions = np.array(collisions, dtype="int16")
+                self.board[collisions[:, 0], collisions[:, 1]] = 0
                 self.clean_diagonal_walls(0)
-                if not validity:
-                    return self.correct_map_defects()
+                return self.correct_map_defects()
             else:
-                neighborhoods = self.build_neighborhoods(walls_on_enclosed)
-                random.shuffle(neighborhoods)
-                for set in neighborhoods:
-                    random.shuffle(set)
-                    self.board[set[0][0], set[0][1]] = 0
-                    validity, sample = self.map_is_valid()
-                    if validity:
-                        break
+                # decimate enclosing walls
+                walls_on_enclosed = np.array(walls_on_enclosed)
+                length = walls_on_enclosed.shape[0]
+                decimation_factor = 20
+                # by increasing decimation rate for larger maps, we may sacrifice some quality to achieve
+                # a close to constant number of iterations to resolve the map
+                if self.size >= 81:
+                    decimation_factor = 5
+                elif self.size >= 41:
+                    decimation_factor = 10
+                val = max(1, length // decimation_factor)
+                indxs = np.random.choice(np.arange(length), val, False)
+                self.board[walls_on_enclosed[indxs, 0], walls_on_enclosed[indxs, 1]] = 0
                 self.clean_diagonal_walls(0)
-                if not validity:
-                    return self.correct_map_defects()
-            return self.map_is_valid()
+                return self.correct_map_defects()
 
     def on_goal_reached(self):
         self.score += 1
@@ -266,10 +347,10 @@ class ExploreGame:
     def update(self, action):  # the game logic on a turn execution
         if self.won:
             return self.won
-        old = [self.agent[0], self.agent[1]]  # this will be used for collisions later
+        old = self.agent.copy()  # this will be used for collisions later
         if action < 4:
             coord = self.action_switch(self.agent, action)
-            self.agent = [min(self.size-1, max(0, coord[0])), min(self.size-1, max(0, coord[1]))]
+            self.agent = np.array([min(self.size-1, max(0, coord[0])), min(self.size-1, max(0, coord[1]))])
         else:
             return self.won
 
@@ -285,17 +366,17 @@ class ExploreGame:
     def build_goal_options(self):
         self.goal_options = []
         free_squares = np.where(self.board == 0)
-        center = int((self.size - 1) / 2)
         delta = int(self.size // 4)
-        lower = center - delta
-        upper = center + delta
+        lower = self.center - delta
+        upper = self.center + delta
         for (i, j) in zip(free_squares[0], free_squares[1]):
-            if i == center and j == center:  # Skip where the agent must spawn, yes this is redundant if exclusion is on
+            if i == self.center and j == self.center:  # Skip where the agent must spawn,
+                # yes this is redundant if exclusion is on
                 continue
-            elif (lower <= i <= upper) and (lower <= j <= upper):
+            elif self.excluded and (lower <= i <= upper) and (lower <= j <= upper):
                 continue
             else:
-                self.goal_options.append([i, j])
+                self.goal_options.append(np.array([i, j]))
 
     def get_random_goal(self):  # randomly spawns the goal in on the map
         if self.goal_options is None:
@@ -309,13 +390,14 @@ class ExploreGame:
         if build and self.maze:
             self.board = self.board * 0
             self.build_map()
-        self.goal_options = None
-        self.agent = [int((self.size - 1) / 2),
-                      int((self.size - 1) / 2)]  # given size must be odd, this places the player in the center
+            self.goal_options = None
+        self.agent = np.array([self.center, self.center])
+        # given size must be odd, this places the player in the center
+
         self.goal = self.get_random_goal()
         self.update_trace()
 
-    def soft_reset(self, rebuild=True):  # resets the game state but not the trace and optionally the map
+    def soft_reset(self, rebuild=False):  # resets the game state but not the trace and optionally the map
         self.new_map(rebuild)
         self.won = False
         self.score = 0
@@ -341,7 +423,7 @@ class ExploreGame:
 
 
 class ExploreViewer:
-    def __init__(self, events, name="Explore",x=5, y=20, size=21, window_height=300, framerate=60):
+    def __init__(self, events, name="Explore", x=5, y=20, size=21, window_height=300, framerate=60):
         # this sets the windows location, this will be used to distribute windows when simulating many games at once
         os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (x, y)
         pygame.init()
@@ -443,6 +525,6 @@ class ExploreViewer:
         pygame.quit()
 
 
-def launch_viewer(q, name="Explore", x=5, y=20, size=21, window_height=300):
-    view = ExploreViewer(q, name, x, y, size, window_height)
+def launch_viewer(q, name="Explore", x=5, y=20, size=21, window_height=300, framerate=60):
+    view = ExploreViewer(q, name, x, y, size, window_height, framerate)
     view.start()
