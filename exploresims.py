@@ -65,7 +65,7 @@ def simulate_explore(semaphore, out_lock, q_out, samples, games, turns, chooser,
     out_lock.release()
 
 
-def sim_1(choosers, samples=100, games=100, turns=80, rebuild=False, num_process=4, num_column=2, env_args=[], window_args=[], acceleration=1.05, framerate=30):
+def sim_1(choosers, samples=100, games=100, turns=80, rebuild=False, num_process=4, num_column=3, env_args=[], window_args=[], acceleration=1.05, framerate=30):
     max_processes = num_process
     sem = Semaphore(max_processes)
     out_lock = Lock()
